@@ -32,242 +32,99 @@
  */
 
 // input sequences to align in fasta format
-params.seqs = "$baseDir/data/*.fa"
-params.refs = "$baseDir/data/*.ref"
-
-// input guide trees in Newick format. Or `false` to generate trees
-//params.trees = "/users/cn/egarriga/datasets/homfam/trees/*.{FAMSA,CLUSTALO,CLUSTALO-RANDOM,MAFFT_PARTTREE}.dnd"
-params.trees =""
-
-// generate regressive alignments ?
-params.regressive_align = true
-
-// create progressive alignments ?
-params.progressive_align = true
-
-// evaluate alignments ?
-params.evaluate = true
-
-//aligner and tree generation
-tree_method = "FAMSA"
-align_method = "FAMSA"
-
-// bucket sizes for regressive algorithm
-params.buckets= '1000'
+params.bam = "$baseDir/data/RNA_nanopore.{brain,liver}.*.bam" 
+//"http://www.genoscope.cns.fr/externe/ONT_mouse_RNA/data/transcriptome/RNA_nanopore.liver.C1R1_mapping_E94_minimap2_primary_no_read_less_than_80QC.bam"
 
 // output directory
-//defined in nextflow.config
+params.outdir = "${baseDir}/results"
 
 log.info """\
-         F  A  M  S  A    P  i  p  e  l  i  n  e  ~  version 0.1"
-         ======================================="
-         Input sequences (FASTA)                        : ${params.seqs}
-         Input references (Aligned FASTA)               : ${params.refs}
-         Input trees (NEWICK)                           : ${params.trees}
-         Alignment methods                              : ${align_method}
-         Tree methods                                   : ${tree_method}
-         Generate progressive alignments                : ${params.progressive_align}
-         Generate regressive alignments (DPA)           : ${params.regressive_align}
-         Bucket Sizes for regressive alignments         : ${params.buckets}
-         Perform evaluation? Requires reference         : ${params.evaluate}
+         G  S  O  C    2   0    P  i  p  e  l  i  n  e  ~  version 0.1"
+         =============================================================="
+         Input sequences (BAM)                          : ${params.bam}
          Output directory (DIRECTORY)                   : ${params.outdir}
          """
          .stripIndent()
 
 
-// Channels containing sequences
-if ( params.seqs ) {
+// Channels containing bam files
+if ( params.bam ) {
   Channel
-  .fromPath(params.seqs)
-  .map { item -> [ item.baseName, item] }
-  .into { seqsCh; seqs2 }
+  .fromPath(params.bam)
+  .map { item -> [ item.baseName.tokenize('.')[1], item] }
+  .set { bam_ch }
 }
 
-if ( params.refs ) {
-  Channel
-  .fromPath(params.refs)
-  .map { item -> [ item.baseName, item] }
-  .set { refs }
-}
-
-// Channels for user provided trees or empty channel if trees are to be generated [OPTIONAL]
-if ( params.trees ) {
-  Channel
-    .fromPath(params.trees)
-    .map { item -> [ item.baseName.tokenize('.')[0], item.baseName.tokenize('.')[1], item] }
-    .set { trees }
-}
-else { 
-  Channel
-    .empty()
-    .set { trees }
-}
-
-/*
- * GENERATE GUIDE TREES USING MEHTODS DEFINED WITH "--tree_method"
- *
- * NOTE: THIS IS ONLY IF GUIDE TREES ARE NOT PROVIDED BY THE USER
- * BY USING THE `--trees` PARAMETER
- */
-
-process generate_trees {
-    tag "${id}.${tree_method}"
-    publishDir "${params.outdir}/guide_trees", mode: 'copy', overwrite: true
-   
-    input:
-    set val(id), \
-         file(seqs) \
-         from seqsCh
-
-   output:
-     set val(id), \
-       val(tree_method), \
-       file("${id}.${tree_method}.dnd") \
-       into treesGenerated
-
-   when:
-     !params.trees
-
-   script:
-   """
-   famsa -gt_export ${id}.${tree_method}.dnd ${seqs} ${id}.aln
-   """
-}
-
-treesGenerated
-  .mix ( trees )
-  .combine ( seqs2, by:0 )
-  .into {seqsAndTreesForRegressiveAlignment; seqsAndTreesForProgressiveAlignment }
-
-
-process regressive_alignment {
-    tag "${id}"
-    publishDir "${params.outdir}/alignments", mode: 'copy', overwrite: true
+process stringtie {
+    tag "${pair_id}"
+    publishDir "${params.outdir}/stringtie" , pattern: '*.gtf', mode: 'copy', overwrite: true
+    container 'edgano/c3g'
 
     input:
-        set val(id), \
-        val(tree_method), \
-        file(guide_tree), \
-        file(seqs) \
-        from seqsAndTreesForRegressiveAlignment
-
-      each bucket_size from params.buckets.tokenize(',')
-
-    when:
-      params.regressive_align
+      set val(pair_id), file(bam_file) from bam_ch
 
     output:
-      set val(id), \
-        val("${align_method}"), \
-        val(tree_method), \
-        val("reg_align"), \
-        val(bucket_size), \
-        file("${id}.reg_align.${bucket_size}.${align_method}.with.${tree_method}.tree.aln") \
-        into regressiveOut
+      set val(pair_id), file(bam_file), file("${pair_id}.out.gtf") into stringtie_ch
+
+    script:
+    """ 
+    stringtie -L -o ${pair_id}.out.gtf ${bam_file}
+    """
+}
+process tablemaker {
+    tag "${pair_id}"
+    publishDir "${params.outdir}/tablemaker",  pattern: '*.tablemaker', mode: 'copy', overwrite: true
+    container 'edgano/c3g'
+
+    input:
+      set val(pair_id), file(bam_file), file(gtf_file) from stringtie_ch
+
+    output:
+      set val(pair_id), file(gtf_file),path("${pair_id}.tablemaker") into tablemaker_ch
 
     script:
     """
-        t_coffee -reg -reg_method famsa_msa \
-         -reg_tree ${guide_tree} \
-         -seq ${seqs} \
-         -reg_nseq ${bucket_size} \
-         -reg_homoplasy \
-         -outfile ${id}.reg_align.${bucket_size}.${align_method}.with.${tree_method}.tree.aln
+    tablemaker -W -G ${gtf_file} -o ${pair_id}.tablemaker ${bam_file}
     """
 }
 
-process progressive_alignment {
-    tag "${id}"
-    publishDir "${params.outdir}/alignments", mode: 'copy', overwrite: true
+process ballgown {
+    tag "${pair_id}"
+    publishDir "${params.outdir}/ballgown" , pattern: '*_fpkm.csv', mode: 'copy', overwrite: true
+    container 'kapeel/ballgown-r-package'
 
     input:
-        set val(id), \
-        val(tree_method), \
-        file(guide_tree), \
-        file(seqs) \
-        from seqsAndTreesForProgressiveAlignment
-
-    when:
-      params.progressive_align
+      set val(pair_id), file(gtf_file), file(tableFolder) from tablemaker_ch
 
     output:
-      set val(id), \
-        val("${align_method}"), \
-        val(tree_method), \
-        val("prog_align"), \
-        val("NA"), \
-        file("${id}.prog_align.NA.${align_method}.with.${tree_method}.tree.aln") \
-        into progressiveOut
+      set val(pair_id), file(gtf_file), file("*_fpkm.csv") into ballgown_ch
+    
+    shell:
+    '''
+    #!/usr/bin/env Rscript
+
+    library(ballgown)
+    bg <- ballgown(dataDir = "!{baseDir}/results/tablemaker", samplePattern="!{pair_id}.tablemaker", meas='all')
+
+    transcript_fpkm = texpr(bg, 'FPKM')
+    write.csv(transcript_fpkm,file="!{pair_id}_fpkm.csv")
+    '''
+}
+
+process postProduceOutputs{
+    tag "${pair_id}"
+    publishDir "${params.outdir}/gsoc" , mode: 'copy', overwrite: true
+
+    input:
+      set val(pair_id), file(gtf_file), file(fkm_file) from ballgown_ch
+
+    output:
+      set file("*.gtf"), file("*.csv") into result_ch
 
     script:
     """
-      famsa -gt_import ${guide_tree} ${seqs} ${id}.prog_align.NA.${align_method}.with.${tree_method}.tree.aln
-    """
-}
-
-progressiveOut
-  .mix ( regressiveOut )
-  .set { all_alignments }
-
-refs
-  .cross (all_alignments )
-  .map { it -> [it[0][0], it[1][1], it[1][2], it[1][3], it[1][4], it[1][5], it[0][1]] }
-  .set { toEvaluate }
-
-process evaluation {
-    tag "${id}.${align_method}.${tree_method}.${align_type}.${bucket_size}"
-    publishDir "${params.outdir}/individual_scores", mode: 'copy', overwrite: true
-
-    input:
-      set val(id), \
-          val(align_method), \
-          val(tree_method), \
-          val(align_type), \
-          val(bucket_size), \
-          file(test_alignment), \
-          file(ref_alignment) \
-          from toEvaluate
-
-    output:
-      set val(id), \
-          val(tree_method), \
-          val(align_method), \
-          val(align_type), \
-          val(bucket_size), \
-          file("*.sp"), \
-          file("*.tc"), \
-          file("*.col") \
-          into scores
-
-    when:
-      params.evaluate
-
-     script:
-     """
-       t_coffee -other_pg aln_compare \
-             -al1 ${ref_alignment} \
-             -al2 ${test_alignment} \
-            -compare_mode sp \
-            | grep -v "seq1" | grep -v '*' | \
-            awk '{ print \$4}' ORS="\t" \
-            > "${id}.${align_type}.${bucket_size}.${align_method}.with.${tree_method}.tree.sp"
-
-       t_coffee -other_pg aln_compare \
-             -al1 ${ref_alignment} \
-             -al2 ${test_alignment} \
-            -compare_mode tc \
-            | grep -v "seq1" | grep -v '*' | \
-            awk '{ print \$4}' ORS="\t" \
-            > "${id}.${align_type}.${bucket_size}.${align_method}.with.${tree_method}.tree.tc"
-
-       t_coffee -other_pg aln_compare \
-             -al1 ${ref_alignment} \
-             -al2 ${test_alignment} \
-            -compare_mode column \
-            | grep -v "seq1" | grep -v '*' | \
-              awk '{ print \$4}' ORS="\t" \
-            > "${id}.${align_type}.${bucket_size}.${align_method}.with.${tree_method}.tree.col"
-
+    head -1000 ${gtf_file} > ${pair_id}_trim.gtf
+    head -1000 ${fkm_file} > ${pair_id}_trim.csv
     """
 }
 

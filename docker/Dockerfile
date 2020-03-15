@@ -21,4 +21,28 @@ RUN apt-get update && \
       ruby \ 
       python-setuptools \
       default-jdk \
-      libpng-dev 
+      libpng-dev \
+      automake \
+      libtool \
+      r-base
+
+# install StringTie
+RUN git clone https://github.com/gpertea/stringtie && \
+  cd stringtie && \
+  make release && \
+  cp stringtie /bin/ 
+
+# install cufflinks
+RUN wget http://ccb.jhu.edu/software/cuffraw/tablemaker-2.1.1.Linux_x86_64.tar.gz && \
+  tar -xvf tablemaker-2.1.1.Linux_x86_64.tar.gz && \
+  cp tablemaker-2.1.1.Linux_x86_64/tablemaker /bin
+
+#
+# Install ballgown 
+# https://liorpachter.wordpress.com/2015/08/17/a-sleuth-for-rna-seq/
+#
+#RUN echo 'source("https://bioconductor.org/biocLite.R")' \
+#  && echo 'install.packages("BiocManager")' \
+#  && echo 'BiocManager::install("ballgown")' 
+RUN echo 'install.packages("BiocManager")' \
+&& echo 'library(ballgown)'
