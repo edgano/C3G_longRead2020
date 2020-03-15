@@ -32,8 +32,8 @@
  */
 
 // input sequences to align in fasta format
-params.bam = "$baseDir/data/RNA_nanopore.{brain,liver}.*.bam" 
-//"http://www.genoscope.cns.fr/externe/ONT_mouse_RNA/data/transcriptome/RNA_nanopore.liver.C1R1_mapping_E94_minimap2_primary_no_read_less_than_80QC.bam"
+params.bam = "http://www.genoscope.cns.fr/externe/ONT_mouse_RNA/data/transcriptome/RNA_nanopore.liver.C1R1_mapping_E94_minimap2_primary_no_read_less_than_80QC.bam"
+//"$baseDir/data/RNA_nanopore.{brain,liver}.*.bam" 
 
 // output directory
 params.outdir = "${baseDir}/results"
